@@ -10,7 +10,7 @@ libcsdr_la_LIBADD = $(FFTW3_LIBS)
 
 bin_PROGRAMS = csdr nmux
 csdr_SOURCES = csdr.c benchmark.c
-csdr_LDADD = libcsdr.la $(FFTW3_LIBS)
+csdr_LDADD = libcsdr.la -lrt $(FFTW3_LIBS)
 csdr_CFLAGS = -DCSDR_VERSION=\"$(PACKAGE_VERSION)\"
 
 nmux_SOURCES = nmux.cpp tsmpool.h tsmpool.cpp

@@ -39,6 +39,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <sys/select.h>
+#include <sys/mman.h>
 #include <fcntl.h>
 #include <sys/ioctl.h>
 #include <unistd.h>
@@ -193,6 +194,11 @@ char usage[]=
 "    fastddc_inv_cc <shift_rate> <decimation> [transition_bw [window]]\n"
 "    _fft2octave <fft_size>\n"
 "    benchmark \n"
+"    cicddc_s16_c\n"
+"    cicddc_cs16_c\n"
+"    shm_cicddc_s16_c\n"
+"    shm_cicddc_cs16_c\n"
+"    shm_cicddc_cu8_c\n"
 "    convert_f_i16             #deprecated, use instead: convert_f_s16\n"
 "    convert_i16_f             #deprecated, use instead: convert_s16_f\n"
 "    floatdump_f               #deprecated, use instead: dump_f\n"
@@ -275,17 +281,18 @@ int clone_(int bufsize_param)
 
 int init_fifo(int argc, char *argv[])
 {
-    if(argc>=4)
-    {
-        if(!strcmp(argv[2],"--fifo"))
+    int i;
+    for(i = 2; i < argc-1; i++) {
+        char *arg_name = argv[i], *arg_param = argv[i+1];
+	if(!strcmp(arg_name,"--fifo"))
         {
             errhead(); fprintf(stderr,"fifo control mode on\n");
-            int fd = open(argv[3], O_RDONLY);
+            int fd = open(arg_param, O_RDONLY);
             int flags = fcntl(fd, F_GETFL, 0);
             fcntl(fd, F_SETFL, flags | O_NONBLOCK);
             return fd;
         }
-        else if(!strcmp(argv[2],"--fd"))  
+        else if(!strcmp(arg_name,"--fd"))
         {
             //to use this:
             //1. Create a pipe(pipedesc) in your process.
@@ -295,7 +302,7 @@ int init_fifo(int argc, char *argv[])
             //3. From your parent process, write into pipedesc[1].
             //This is implemented in ddcd, check there to see how to do it!
             int fd;
-            if(sscanf(argv[3], "%d",&fd)<=0) return 0;
+            if(sscanf(arg_param, "%d",&fd)<=0) return 0;
             errhead();
             fprintf(stderr,"fd control mode on, fd=%d\n", fd);
             int flags = fcntl(fd, F_GETFL, 0);
@@ -3884,10 +3891,164 @@ int main(int argc, char *argv[])
         }
     }
 
+    /*
+       ____ ___ ____   ____  ____   ____
+      / ___|_ _/ ___| |  _ \|  _ \ / ___|
+     | |    | | |     | | | | | | | |
+     | |___ | | |___  | |_| | |_| | |___
+      \____|___\____| |____/|____/ \____|
+    */
+
+    {
+        int complex_cic, cu8_cic;
+        if((!strcmp(argv[1],"cicddc_s16_c")) | (complex_cic=!strcmp(argv[1],"cicddc_cs16_c"))) {
+            float rate=0;
+            int fd;
+            int factor=0, insize, outsize;
+            bigbufs = 1;
+
+            if(argc<=2) return badsyntax("need required parameter(s) (decimation factor, [rate])");
+            sscanf(argv[2],"%d",&factor);
+            if(fd=init_fifo(argc,argv))
+            {
+                while(!read_fifo_ctl(fd,"%g\n",&rate)) usleep(10000);
+            }
+            else
+            {
+                if(argc<=3) return badsyntax("need required parameters (decimation factor, rate)");
+                sscanf(argv[3],"%g",&rate);
+            }
+
+            the_bufsize = getbufsize();
+            outsize = the_bufsize / factor;
+            insize = outsize * factor; // make it integer multiple of factor
+            sendbufsize(outsize);
+            if(complex_cic) insize *= 2;
+
+            int16_t *input_buffer = malloc(sizeof(int16_t) * insize);
+            complexf *output_buffer = malloc(sizeof(complexf) * outsize);
+
+            void *state = cicddc_init(factor);
+            for(;;)
+            {
+                FEOF_CHECK;
+                fread(input_buffer, sizeof(int16_t), insize, stdin);
+                if(complex_cic)
+                    cicddc_cs16_c(state, input_buffer, output_buffer, outsize, rate);
+                else
+                    cicddc_s16_c(state, input_buffer, output_buffer, outsize, rate);
+                fwrite(output_buffer, sizeof(complexf), outsize, stdout);
+                fflush(stdout);
+                read_fifo_ctl(fd,"%g\n",&rate);
+                TRY_YIELD;
+            }
+            cicddc_free(state);
+        }
+
+        /* For now, complex uint8 is handled similarly to real int16 because the size is the same.
+        (Two 8-bit numbers in one "int16_t") */
+        if((!strcmp(argv[1],"shm_cicddc_s16_c")) | (complex_cic=!strcmp(argv[1],"shm_cicddc_cs16_c"))
+        | (cu8_cic=!strcmp(argv[1],"shm_cicddc_cu8_c"))) {
+            float rate=0;
+            int fd, shm_fd;
+            int factor=0, insize, outsize;
+            //bigbufs = 1;
+
+            if(argc<=3) return badsyntax("need required parameter(s) (shm name, decimation factor, [rate])");
+            sscanf(argv[3],"%d",&factor);
+            if(fd=init_fifo(argc,argv))
+            {
+                while(!read_fifo_ctl(fd,"%g\n",&rate)) usleep(10000);
+            }
+            else
+            {
+                if(argc<=4) return badsyntax("need required parameters (shm name, decimation factor, rate)");
+                sscanf(argv[4],"%g",&rate);
+            }
+
+            // some code from shmread:
+            void *shm_buf;
+            size_t *shm_p;
+            size_t readpoint_bufs = 0, writepoint_bufs = 0, bufsize_bufs;
+            size_t shm_size, bufsize_bytes, insize_bytes, prevp;
+            struct stat shm_stat;
+            shm_fd = shm_open(argv[2], O_RDONLY, 0644);
+            if(shm_fd < 0) { perror("shm_open failed"); return 1; }
+            if(fstat(shm_fd, &shm_stat) < 0) { perror("fstat failed"); return 1; }
+            shm_size = shm_stat.st_size;
+            bufsize_bytes = shm_size - sizeof(size_t);
+            shm_buf = mmap(0, shm_size, PROT_READ, MAP_SHARED, shm_fd, 0);
+            if(shm_buf == MAP_FAILED) { perror("mmap failed"); return 1; }
+            shm_p = shm_buf + bufsize_bytes;
+            prevp = *shm_p;
+            if(prevp >= bufsize_bytes) return badsyntax("bad pointer value in shm buffer");
+
+            outsize = 0x400;
+            insize = outsize * factor; // make it integer multiple of factor
+            sendbufsize(outsize);
+            if(complex_cic) insize *= 2;
+
+            insize_bytes = sizeof(int16_t) * insize;
+            /* We don't need modulo or memory mapping tricks if wrap-around occurs at input block boundary.
+            This needs the SHM buffer size to be a multiple of insize. */
+            if(bufsize_bytes % insize_bytes != 0) return badsyntax("SHM size should be multiple of CIC processing block size");
+
+            bufsize_bufs = bufsize_bytes / insize_bytes;
+            writepoint_bufs = readpoint_bufs = prevp / insize_bytes;
+
+            int16_t *input_buffer = malloc(sizeof(int16_t) * insize);
+            complexf *output_buffer = malloc(sizeof(complexf) * outsize);
+
+            void *state = cicddc_init(factor);
+            size_t extradelay = 0;
+            for(;;)
+            {
+                //fprintf(stderr, "%d %d\n", writepoint_bufs, readpoint_bufs);
+                if(writepoint_bufs != readpoint_bufs) {
+                    int r;
+                    ssize_t readpoint_bufs1 = (ssize_t)readpoint_bufs - extradelay;
+                    while(readpoint_bufs1 < 0) readpoint_bufs1 += bufsize_bufs;
+
+                    //input_buffer = (int16_t*)(shm_buf + insize_bytes * readpoint_bufs1);
+
+                    /* It seems strange but memcpying small blocks and reading from there
+                    is faster than reading directly from the SHM buffer during processing
+                    (at least on the server I tested it on). */
+                    memcpy(input_buffer, shm_buf + insize_bytes * readpoint_bufs1, insize_bytes);
+
+                    if(cu8_cic)
+                        cicddc_cu8_c(state, (uint8_t*)input_buffer, output_buffer, outsize, rate);
+                    else if(complex_cic)
+                        cicddc_cs16_c(state, input_buffer, output_buffer, outsize, rate);
+                    else
+                        cicddc_s16_c(state, input_buffer, output_buffer, outsize, rate);
+                    fwrite(output_buffer, sizeof(complexf), outsize, stdout);
+                    fflush(stdout);
+
+                    // advance pointer:
+                    readpoint_bufs++;
+                    if(readpoint_bufs >= bufsize_bufs) readpoint_bufs = 0;
+                } else {
+                    ssize_t newdelay = -1;
+                    usleep(50000);
+                    read_fifo_ctl(fd,"%g %zd\n",&rate, &newdelay);
+                    if(newdelay >= 0 && newdelay < bufsize_bytes) {
+                        extradelay = newdelay / insize_bytes;
+                        fprintf(stderr, "delaying: %zd %zd\n", extradelay, newdelay);
+                    }
+
+                    writepoint_bufs = (*shm_p) / insize_bytes;
+                }
+                /*TRY_YIELD;*/
+            }
+            cicddc_free(state);
+        }
+    }
+
+
     if(!strcmp(argv[1],"benchmark")) {
         return csdr_benchmark();
     }
-
 
     if(!strcmp(argv[1],"none"))
     {
