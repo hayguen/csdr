@@ -28,6 +28,14 @@ ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
+/* define specific FFT_PLAN_T before including libcsdr.h */
+#include "fft_fftw.h"
+#include "fft_rpi.h"
+
+/* include own header "nearly" first, to see missing includes */
+#include "libcsdr.h"
+
+
 #include <stdio.h>
 #include <time.h>
 #include <math.h>
@@ -35,10 +43,17 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <string.h>
 #include <unistd.h>
 #include <limits.h>
-#include "libcsdr.h"
+
 #include "predefined.h"
 #include <assert.h>
 #include <stdarg.h>
+
+
+const char * csdr_fft_library()
+{
+    return FFT_LIBRARY_USED;
+}
+
 
 /*
            _           _                   __                  _   _

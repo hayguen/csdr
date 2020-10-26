@@ -45,14 +45,22 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <unistd.h>
 #include <time.h>
 #include <stdarg.h>
+
+/* define specific FFT_PLAN_T before including libcsdr.h
+ * THIS allows to use some internals on FFT !
+ */
+#include "fft_fftw.h"
+#include "fft_rpi.h"
+
 #include "libcsdr.h"
 #include "libcsdr_gpl.h"
 #include "ima_adpcm.h"
+#include "fastddc.h"
+
 #include <sched.h>
 #include <math.h>
 #include <strings.h>
 #include <errno.h>
-#include "fastddc.h"
 #include <assert.h>
 #include "benchmark.h"
 #include <getopt.h>
@@ -2060,7 +2068,7 @@ int main(int argc, char *argv[])
         sscanf(argv[3],"%d",&fft_cycles);
 
         int benchmark=(argc>=5)&&!strcmp(argv[4],"--benchmark");
-        errhead(); fprintf(stderr,"FFT library used: %s\n",FFT_LIBRARY_USED);
+        errhead(); fprintf(stderr,"FFT library used: %s\n", csdr_fft_library() );
 
         complexf* input=(complexf*)fft_malloc(sizeof(complexf)*fft_size);
         complexf* output=(complexf*)fft_malloc(sizeof(complexf)*fft_size);

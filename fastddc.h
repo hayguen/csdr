@@ -1,4 +1,6 @@
-#include <math.h>
+
+#pragma once
+
 #include "libcsdr.h"
 #include "libcsdr_gpl.h"
 

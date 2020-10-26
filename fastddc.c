@@ -28,6 +28,10 @@ ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
+/* define specific FFT_PLAN_T before including libcsdr.h */
+#include "fft_fftw.h"
+#include "fft_rpi.h"
+
 #include "fastddc.h"
 
 //DDC implementation based on:

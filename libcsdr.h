@@ -29,6 +29,8 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
 #pragma once
+
+#include <stdio.h>
 #include <stdint.h>
 #define MIN_M(x,y) (((x)>(y))?(y):(x))
 #define MAX_M(x,y) (((x)<(y))?(y):(x))
@@ -76,9 +78,12 @@ typedef enum window_s
 #define WINDOW_DEFAULT WINDOW_HAMMING
 
 //FFT
-//Note: these reference to things in this file (e.g. complexf):
-#include "fft_fftw.h"
-#include "fft_rpi.h"
+#ifndef FFT_PLAN_T
+  struct csdr_fft_plan_s;
+  #define FFT_PLAN_T struct csdr_fft_plan_s
+#endif
+const char * csdr_fft_library();
+
 
 // =================================================================================
 
@@ -206,7 +211,6 @@ typedef struct shift_addfast_data_s
     float dcos[4];
     float phase_increment;
 } shift_addfast_data_t;
-shift_addfast_data_t shift_addfast_init(float rate);
 shift_addfast_data_t shift_addfast_init(float rate);
 float shift_addfast_cc(complexf *input, complexf* output, int input_size, shift_addfast_data_t* d, float starting_phase);
 
