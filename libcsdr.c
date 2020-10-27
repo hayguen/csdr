@@ -301,25 +301,147 @@ shift_unroll_data_t shift_unroll_init(float rate, int size)
     return output;
 }
 
+void shift_unroll_deinit(shift_unroll_data_t* d)
+{
+    if (d && d->dsin)
+    {
+        free(d->dsin);
+        d->dsin = NULL;
+    }
+    if (d && d->dcos)
+    {
+        free(d->dcos);
+        d->dcos = NULL;
+    }
+}
+
+CSDR_TARGET_CLONES
 float shift_unroll_cc(complexf *input, complexf* output, int input_size, shift_unroll_data_t* d, float starting_phase)
 {
     //input_size should be multiple of 4
     //fprintf(stderr, "shift_addfast_cc: input_size = %d\n", input_size);
-    float cos_start=cos(starting_phase);
-    float sin_start=sin(starting_phase);
+    float cos_start = cos(starting_phase);
+    float sin_start = sin(starting_phase);
     register float cos_val, sin_val;
     for(int i=0;i<input_size; i++) //@shift_unroll_cc
     {
+        iof(output,i) = cos_val*iof(input,i) - sin_val*qof(input,i);
+        qof(output,i) = sin_val*iof(input,i) + cos_val*qof(input,i);
+        // calculate complex phasor for next iteration
         cos_val = cos_start * d->dcos[i] - sin_start * d->dsin[i];
-        sin_val  = sin_start * d->dcos[i] + cos_start * d->dsin[i];
-        iof(output,i)=cos_val*iof(input,i)-sin_val*qof(input,i);
-        qof(output,i)=sin_val*iof(input,i)+cos_val*qof(input,i);
+        sin_val = sin_start * d->dcos[i] + cos_start * d->dsin[i];
     }
     starting_phase+=input_size*d->phase_increment;
     while(starting_phase>PI) starting_phase-=2*PI;
     while(starting_phase<-PI) starting_phase+=2*PI;
     return starting_phase;
 }
+
+CSDR_TARGET_CLONES
+float shift_unroll_inp_c(complexf* in_out, int size, shift_unroll_data_t* d, float starting_phase)
+{
+    float cos_start = cos(starting_phase);
+    float sin_start = sin(starting_phase);
+    register float cos_val, sin_val;
+    for(int i=0;i<size; i++) //@shift_unroll_inp_c
+    {
+        register float inp_i = iof(in_out,i);
+        register float inp_q = qof(in_out,i);
+        iof(in_out,i) = cos_val*inp_i - sin_val*inp_q;
+        qof(in_out,i) = sin_val*inp_i + cos_val*inp_q;
+        // calculate complex phasor for next iteration
+        cos_val = cos_start * d->dcos[i] - sin_start * d->dsin[i];
+        sin_val = sin_start * d->dcos[i] + cos_start * d->dsin[i];
+    }
+    starting_phase += size * d->phase_increment;
+    while(starting_phase>PI) starting_phase-=2*PI;
+    while(starting_phase<-PI) starting_phase+=2*PI;
+    return starting_phase;
+}
+
+
+#define SHIFT_UNROLL_SIZE      CSDR_SHIFT_LIMITED_UNROLL_SIZE
+#define SHIFT_LIMITED_SIMD_SZ  CSDR_SHIFT_LIMITED_SIMD_SZ
+
+shift_limited_unroll_data_t shift_limited_unroll_init(float rate)
+{
+    shift_limited_unroll_data_t output;
+    output.phase_increment=2*rate*PI;
+    float myphase = 0;
+    for(int i=0;i<SHIFT_UNROLL_SIZE;i++)
+    {
+        myphase += output.phase_increment;
+        while(myphase>PI) myphase-=2*PI;
+        while(myphase<-PI) myphase+=2*PI;
+        output.dcos[i] = cos(myphase);
+        output.dsin[i] = sin(myphase);
+    }
+    output.complex_phase.i = 1.0F;
+    output.complex_phase.q = 0.0F;
+    return output;
+}
+
+CSDR_TARGET_CLONES
+void shift_limited_unroll_cc(const complexf *input, complexf* output, int size, shift_limited_unroll_data_t* d)
+{
+    float cos_start = d->complex_phase.i;
+    float sin_start = d->complex_phase.q;
+    register float cos_val = cos_start, sin_val = sin_start;
+    while (size > 0) //@shift_limited_unroll_cc
+    {
+        int N = (size >= SHIFT_UNROLL_SIZE) ? SHIFT_UNROLL_SIZE : size;
+        for(int i=0;i<N/SHIFT_LIMITED_SIMD_SZ; i++ )
+        {
+            for(int j=0; j<SHIFT_LIMITED_SIMD_SZ; j++)
+            {
+                iof(output,SHIFT_LIMITED_SIMD_SZ*i+j) = cos_val*iof(input,SHIFT_LIMITED_SIMD_SZ*i+j) - sin_val*qof(input,SHIFT_LIMITED_SIMD_SZ*i+j);
+                qof(output,SHIFT_LIMITED_SIMD_SZ*i+j) = sin_val*iof(input,SHIFT_LIMITED_SIMD_SZ*i+j) + cos_val*qof(input,SHIFT_LIMITED_SIMD_SZ*i+j);
+                // calculate complex phasor for next iteration
+                cos_val = cos_start * d->dcos[SHIFT_LIMITED_SIMD_SZ*i+j] - sin_start * d->dsin[SHIFT_LIMITED_SIMD_SZ*i+j];
+                sin_val = sin_start * d->dcos[SHIFT_LIMITED_SIMD_SZ*i+j] + cos_start * d->dsin[SHIFT_LIMITED_SIMD_SZ*i+j];
+            }
+        }
+        input += SHIFT_UNROLL_SIZE;
+        output += SHIFT_UNROLL_SIZE;
+        size -= SHIFT_UNROLL_SIZE;
+    }
+    d->complex_phase.i = cos_val;
+    d->complex_phase.q = sin_val;
+}
+
+CSDR_TARGET_CLONES
+void shift_limited_unroll_inp_c(complexf* in_out, int size, shift_limited_unroll_data_t* d)
+{
+    float inp_i[SHIFT_LIMITED_SIMD_SZ];
+    float inp_q[SHIFT_LIMITED_SIMD_SZ];
+    float cos_start = d->complex_phase.i;
+    float sin_start = d->complex_phase.q;
+    register float cos_val = cos_start, sin_val = sin_start;
+    while (size > 0) //@shift_limited_unroll_inp_c
+    {
+        int N = (size >= SHIFT_UNROLL_SIZE) ? SHIFT_UNROLL_SIZE : size;
+        for(int i=0;i<N/SHIFT_LIMITED_SIMD_SZ; i++ )
+        {
+            for(int j=0; j<SHIFT_LIMITED_SIMD_SZ; j++)
+                inp_i[j] = in_out[SHIFT_LIMITED_SIMD_SZ*i+j].i;
+            for(int j=0; j<SHIFT_LIMITED_SIMD_SZ; j++)
+                inp_q[j] = in_out[SHIFT_LIMITED_SIMD_SZ*i+j].q;
+            for(int j=0; j<SHIFT_LIMITED_SIMD_SZ; j++)
+            {
+                iof(in_out,SHIFT_LIMITED_SIMD_SZ*i+j) = cos_val*inp_i[j] - sin_val*inp_q[j];
+                qof(in_out,SHIFT_LIMITED_SIMD_SZ*i+j) = sin_val*inp_i[j] + cos_val*inp_q[j];
+                // calculate complex phasor for next iteration
+                cos_val = cos_start * d->dcos[SHIFT_LIMITED_SIMD_SZ*i+j] - sin_start * d->dsin[SHIFT_LIMITED_SIMD_SZ*i+j];
+                sin_val = sin_start * d->dcos[SHIFT_LIMITED_SIMD_SZ*i+j] + cos_start * d->dsin[SHIFT_LIMITED_SIMD_SZ*i+j];
+            }
+        }
+        in_out += SHIFT_UNROLL_SIZE;
+        size -= SHIFT_UNROLL_SIZE;
+    }
+    d->complex_phase.i = cos_val;
+    d->complex_phase.q = sin_val;
+}
+
 
 shift_addfast_data_t shift_addfast_init(float rate)
 {
@@ -558,6 +680,146 @@ float shift_addfast_cc(complexf *input, complexf* output, int input_size, shift_
 #endif
 
 #endif
+
+
+#define SHIFT_REC_SIMD_SZ CSDR_SHIFT_RECURSIVE_SIMD_SZ
+
+void shift_recursive_osc_update_rate(float rate, shift_recursive_osc_conf_t *conf, shift_recursive_osc_t* state)
+{
+    // constants for single phase step
+    float phase_increment_s = rate*PI;
+    float k1 = tan(0.5*phase_increment_s);
+    float k2 = 2*k1 /(1 + k1 * k1);
+    for (int j=1; j<SHIFT_REC_SIMD_SZ; j++)
+    {
+        float tmp;
+        state->u_cos[j] = state->u_cos[j-1];
+        state->v_sin[j] = state->v_sin[j-1];
+        // small steps
+        tmp = state->u_cos[j] - k1 * state->v_sin[j];
+        state->v_sin[j] += k2 * tmp;
+        state->u_cos[j] = tmp - k1 * state->v_sin[j];
+    }
+
+    // constants for SHIFT_REC_SIMD_SZ times phase step
+    float phase_increment_b = phase_increment_s * SHIFT_REC_SIMD_SZ;
+    while(phase_increment_b > PI) phase_increment_b-=2*PI;
+    while(phase_increment_b < -PI) phase_increment_b+=2*PI;
+    conf->k1 = tan(0.5*phase_increment_b);
+    conf->k2 = 2*conf->k1 / (1 + conf->k1 * conf->k1);
+}
+
+void shift_recursive_osc_init(float rate, float starting_phase, shift_recursive_osc_conf_t *conf, shift_recursive_osc_t *state)
+{
+    if (starting_phase != 0.0F)
+    {
+        state->u_cos[0] = cos(starting_phase);
+        state->v_sin[0] = sin(starting_phase);
+    }
+    else
+    {
+        state->u_cos[0] = 1.0F;
+        state->v_sin[0] = 0.0F;
+    }
+    shift_recursive_osc_update_rate(rate, conf, state);
+}
+
+
+CSDR_TARGET_CLONES
+void shift_recursive_osc_cc(const complexf *input, complexf* output,
+    int size, const shift_recursive_osc_conf_t *conf, shift_recursive_osc_t* state_ext)
+{
+    float tmp[SHIFT_REC_SIMD_SZ];
+    float inp_i[SHIFT_REC_SIMD_SZ];
+    float inp_q[SHIFT_REC_SIMD_SZ];
+    shift_recursive_osc_t state = *state_ext;
+    const float k1 = conf->k1;
+    const float k2 = conf->k2;
+    for(int i=0;i<size/SHIFT_REC_SIMD_SZ; i++) //@shift_recursive_osc_cc
+    {
+        //we multiply two complex numbers - similar to shift_math_cc
+        for (int j=0;j<SHIFT_REC_SIMD_SZ;j++)
+        {
+            inp_i[j] = input[SHIFT_REC_SIMD_SZ*i+j].i;
+            inp_q[j] = input[SHIFT_REC_SIMD_SZ*i+j].q;
+        }
+        for (int j=0;j<SHIFT_REC_SIMD_SZ;j++)
+        {
+            iof(output,SHIFT_REC_SIMD_SZ*i+j) = state.u_cos[j] * inp_i[j] - state.v_sin[j] * inp_q[j];
+            qof(output,SHIFT_REC_SIMD_SZ*i+j) = state.v_sin[j] * inp_i[j] + state.u_cos[j] * inp_q[j];
+        }
+        // update complex phasor - like incrementing phase
+        for (int j=0;j<SHIFT_REC_SIMD_SZ;j++)
+            tmp[j] = state.u_cos[j] - k1 * state.v_sin[j];
+        for (int j=0;j<SHIFT_REC_SIMD_SZ;j++)
+            state.v_sin[j] += k2 * tmp[j];
+        for (int j=0;j<SHIFT_REC_SIMD_SZ;j++)
+            state.u_cos[j] = tmp[j] - k1 * state.v_sin[j];
+    }
+    *state_ext = state;
+}
+
+CSDR_TARGET_CLONES
+void shift_recursive_osc_inp_c(complexf* in_out,
+    int size, const shift_recursive_osc_conf_t *conf, shift_recursive_osc_t* state_ext)
+{
+    float tmp[SHIFT_REC_SIMD_SZ];
+    float inp_i[SHIFT_REC_SIMD_SZ];
+    float inp_q[SHIFT_REC_SIMD_SZ];
+    shift_recursive_osc_t state = *state_ext;
+    const float k1 = conf->k1;
+    const float k2 = conf->k2;
+    for(int i=0;i<size/SHIFT_REC_SIMD_SZ; i++) //@shift_recursive_osc_inp_c
+    {
+        for (int j=0;j<SHIFT_REC_SIMD_SZ;j++)
+        {
+            inp_i[j] = in_out[SHIFT_REC_SIMD_SZ*i+j].i;
+            inp_q[j] = in_out[SHIFT_REC_SIMD_SZ*i+j].q;
+        }
+        //we multiply two complex numbers - similar to shift_math_cc
+        for (int j=0;j<SHIFT_REC_SIMD_SZ;j++)
+        {
+            iof(in_out,SHIFT_REC_SIMD_SZ*i+j) = state.u_cos[j] * inp_i[j] - state.v_sin[j] * inp_q[j];
+            qof(in_out,SHIFT_REC_SIMD_SZ*i+j) = state.v_sin[j] * inp_i[j] + state.u_cos[j] * inp_q[j];
+        }
+        // update complex phasor - like incrementing phase
+        for (int j=0;j<SHIFT_REC_SIMD_SZ;j++)
+            tmp[j] = state.u_cos[j] - k1 * state.v_sin[j];
+        for (int j=0;j<SHIFT_REC_SIMD_SZ;j++)
+            state.v_sin[j] += k2 * tmp[j];
+        for (int j=0;j<SHIFT_REC_SIMD_SZ;j++)
+            state.u_cos[j] = tmp[j] - k1 * state.v_sin[j];
+    }
+    *state_ext = state;
+}
+
+CSDR_TARGET_CLONES
+void gen_recursive_osc_c(complexf* output,
+    int size, const shift_recursive_osc_conf_t *conf, shift_recursive_osc_t* state_ext)
+{
+    float tmp[SHIFT_REC_SIMD_SZ];
+    shift_recursive_osc_t state = *state_ext;
+    const float k1 = conf->k1;
+    const float k2 = conf->k2;
+    for(int i=0;i<size/SHIFT_REC_SIMD_SZ; i++) //@gen_recursive_osc_c
+    {
+        // output complex oscillator value
+        for (int j=0;j<SHIFT_REC_SIMD_SZ;j++)
+        {
+            iof(output,SHIFT_REC_SIMD_SZ*i+j) = state.u_cos[j];
+            qof(output,SHIFT_REC_SIMD_SZ*i+j) = state.v_sin[j];
+        }
+        // update complex phasor - like incrementing phase
+        for (int j=0;j<SHIFT_REC_SIMD_SZ;j++)
+            tmp[j] = state.u_cos[j] - k1 * state.v_sin[j];
+        for (int j=0;j<SHIFT_REC_SIMD_SZ;j++)
+            state.v_sin[j] += k2 * tmp[j];
+        for (int j=0;j<SHIFT_REC_SIMD_SZ;j++)
+            state.u_cos[j] = tmp[j] - k1 * state.v_sin[j];
+    }
+    *state_ext = state;
+}
+
 
 #if defined NEON_OPTS && defined __arm__
 #pragma message "Manual NEON (arm32) optimizations are ON: we have a faster fir_decimate_cc now."

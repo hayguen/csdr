@@ -214,6 +214,7 @@ typedef struct shift_addfast_data_s
 shift_addfast_data_t shift_addfast_init(float rate);
 float shift_addfast_cc(complexf *input, complexf* output, int input_size, shift_addfast_data_t* d, float starting_phase);
 
+
 typedef struct shift_unroll_data_s
 {
     float* dsin;
@@ -221,8 +222,56 @@ typedef struct shift_unroll_data_s
     float phase_increment;
     int size;
 } shift_unroll_data_t;
-float shift_unroll_cc(complexf *input, complexf* output, int input_size, shift_unroll_data_t* d, float starting_phase);
 shift_unroll_data_t shift_unroll_init(float rate, int size);
+void shift_unroll_deinit(shift_unroll_data_t* d);
+float shift_unroll_cc(complexf *input, complexf* output, int size, shift_unroll_data_t* d, float starting_phase);
+float shift_unroll_inp_c(complexf* in_out, int size, shift_unroll_data_t* d, float starting_phase);
+
+/* similar to shift_unroll_cc() - but, have fixed and limited precalc size
+ * idea: smaller cache usage by table
+ * size must be multiple of CSDR_SHIFT_LIMITED_SIMD (= 4)
+ */
+#define CSDR_SHIFT_LIMITED_UNROLL_SIZE  32
+#define CSDR_SHIFT_LIMITED_SIMD_SZ  4
+typedef struct shift_limited_unroll_data_s
+{
+    float dcos[CSDR_SHIFT_LIMITED_UNROLL_SIZE];
+    float dsin[CSDR_SHIFT_LIMITED_UNROLL_SIZE];
+    complexf complex_phase;
+    float phase_increment;
+} shift_limited_unroll_data_t;
+shift_limited_unroll_data_t shift_limited_unroll_init(float rate);
+/* size must be multiple of CSDR_SHIFT_LIMITED_SIMD_SZ */
+/* starting_phase for next call is kept internal in state */
+void shift_limited_unroll_cc(const complexf *input, complexf* output, int size, shift_limited_unroll_data_t* d);
+void shift_limited_unroll_inp_c(complexf* in_out, int size, shift_limited_unroll_data_t* d);
+
+
+/* Recursive Quadrature Oscillator functions "recursive_osc"
+ * see https://www.vicanek.de/articles/QuadOsc.pdf
+ */
+#define CSDR_SHIFT_RECURSIVE_SIMD_SZ  8
+typedef struct shift_recursive_osc_s
+{
+    float u_cos[CSDR_SHIFT_RECURSIVE_SIMD_SZ];
+    float v_sin[CSDR_SHIFT_RECURSIVE_SIMD_SZ];
+} shift_recursive_osc_t;
+
+typedef struct shift_recursive_osc_conf_s
+{
+    float k1;
+    float k2;
+} shift_recursive_osc_conf_t;
+
+void shift_recursive_osc_init(float rate, float starting_phase, shift_recursive_osc_conf_t *conf, shift_recursive_osc_t *state);
+void shift_recursive_osc_update_rate(float rate, shift_recursive_osc_conf_t *conf, shift_recursive_osc_t* state);
+
+/* size must be multiple of CSDR_SHIFT_LIMITED_SIMD_SZ */
+/* starting_phase for next call is kept internal in state */
+void shift_recursive_osc_cc(const complexf *input, complexf* output, int size, const shift_recursive_osc_conf_t *conf, shift_recursive_osc_t* state);
+void shift_recursive_osc_inp_c(complexf* output, int size, const shift_recursive_osc_conf_t *conf, shift_recursive_osc_t* state);
+void gen_recursive_osc_c(complexf* output, int size, const shift_recursive_osc_conf_t *conf, shift_recursive_osc_t* state);
+
 
 int log2n(int x);
 int next_pow2(int x);
