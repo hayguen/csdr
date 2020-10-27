@@ -1294,8 +1294,8 @@ void apply_fir_fft_cc(FFT_PLAN_T* plan, FFT_PLAN_T* plan_inverse, complexf* taps
     fft_execute(plan);
 
     //multiply the filter and the input
-    complexf* in = plan->output;
-    complexf* out = plan_inverse->input;
+    complexf* in = (complexf*)plan->output;
+    complexf* out = (complexf*)plan_inverse->input;
 
     for(int i=0;i<plan->size;i++) //@apply_fir_fft_cc: multiplication
     {
@@ -1307,7 +1307,7 @@ void apply_fir_fft_cc(FFT_PLAN_T* plan, FFT_PLAN_T* plan_inverse, complexf* taps
     fft_execute(plan_inverse);
 
     //add the overlap of the previous segment
-    complexf* result = plan_inverse->output;
+    complexf* result = (complexf*)plan_inverse->output;
 
     for(int i=0;i<plan->size;i++) //@apply_fir_fft_cc: normalize by fft_size
     {
@@ -1348,14 +1348,14 @@ void *cicddc_init(int factor) {
     int i;
     int sinesize2 = SINESIZE * 5/4; // 25% extra to get cosine from the same table
     cicddc_t *s;
-    s = malloc(sizeof(cicddc_t));
+    s = (cicddc_t *)malloc(sizeof(cicddc_t));
     memset(s, 0, sizeof(cicddc_t));
 
     float sineamp = 32767.0f;
     s->factor = factor;
     s->gain = 1.0f / SHRT_MAX / sineamp / factor / factor / factor; // compensate for gain of 3 integrators
 
-    s->sinetable = malloc(sinesize2 * sizeof(*s->sinetable));
+    s->sinetable = (int16_t *)malloc(sinesize2 * sizeof(*s->sinetable));
     double f = 2.0*M_PI / (double)SINESIZE;
     for(i = 0; i < sinesize2; i++) {
         s->sinetable[i] = sineamp * cos(f * i);
@@ -1364,13 +1364,13 @@ void *cicddc_init(int factor) {
 }
 
 void cicddc_free(void *state) {
-    cicddc_t *s = state;
+    cicddc_t *s = (cicddc_t *)state;
     free(s->sinetable);
     free(s);
 }
 
 void cicddc_s16_c(void *state, int16_t *input, complexf *output, int outsize, float rate) {
-    cicddc_t *s = state;
+    cicddc_t *s = (cicddc_t *)state;
     int k;
     int factor = s->factor;
     cic_dt ig0a = s->ig0a, ig0b = s->ig0b, ig1a = s->ig1a, ig1b = s->ig1b;
@@ -1419,7 +1419,7 @@ void cicddc_s16_c(void *state, int16_t *input, complexf *output, int outsize, fl
 }
 
 void cicddc_cs16_c(void *state, int16_t *input, complexf *output, int outsize, float rate) {
-    cicddc_t *s = state;
+    cicddc_t *s = (cicddc_t *)state;
     int k;
     int factor = s->factor;
     cic_dt ig0a = s->ig0a, ig0b = s->ig0b, ig1a = s->ig1a, ig1b = s->ig1b;
@@ -1477,7 +1477,7 @@ void cicddc_cs16_c(void *state, int16_t *input, complexf *output, int outsize, f
 /* This is almost copy paste from cicddc_cs16_c.
    I'm afraid this is going to be annoying to maintain... */
 void cicddc_cu8_c(void *state, uint8_t *input, complexf *output, int outsize, float rate) {
-    cicddc_t *s = state;
+    cicddc_t *s = (cicddc_t *)state;
     int k;
     int factor = s->factor;
     cic_dt ig0a = s->ig0a, ig0b = s->ig0b, ig1a = s->ig1a, ig1b = s->ig1b;
@@ -1755,7 +1755,16 @@ complexf fmdemod_quadri_cf(complexf* input, float* output, int input_size, float
     return input[input_size-1];
 }
 
-inline int is_nan(float f)
+// external
+int is_nan(float f)
+{
+    //http://stackoverflow.com/questions/570669/checking-if-a-double-or-float-is-nan-in-c
+    unsigned u = *(unsigned*)&f;
+    return (u&0x7F800000) == 0x7F800000 && (u&0x7FFFFF); // Both NaN and qNan.
+}
+
+static inline
+int is_nan_inlined(float f)
 {
     //http://stackoverflow.com/questions/570669/checking-if-a-double-or-float-is-nan-in-c
     unsigned u = *(unsigned*)&f;
@@ -1774,7 +1783,7 @@ float deemphasis_wfm_ff (float* input, float* output, int input_size, float tau,
     */
     float dt = 1.0/sample_rate;
     float alpha = dt/(tau+dt);
-    if(is_nan(last_output)) last_output=0.0; //if last_output is NaN
+    if(is_nan_inlined(last_output)) last_output=0.0; //if last_output is NaN
     output[0]=alpha*input[0]+(1-alpha)*last_output;
     for (int i=1;i<input_size;i++) //@deemphasis_wfm_ff
        output[i]=alpha*input[i]+(1-alpha)*output[i-1]; //this is the simplest IIR LPF
@@ -1943,7 +1952,7 @@ float *precalculate_window(int size, window_t window)
 {
     float (*window_function)(float)=firdes_get_window_kernel(window);
     float *windowt;
-    windowt = malloc(sizeof(float) * size);
+    windowt = (float *)malloc(sizeof(float) * size);
     for(int i=0;i<size;i++) //@precalculate_window
     {
         float rate=(float)i/(size-1);
@@ -2987,7 +2996,7 @@ float normalized_timing_variance_u32_f(unsigned* input, float* temp, int input_s
         unsigned sinearest_remain = (input[i]-initial_sample_offset) % samples_per_symbol;
         if(sinearest_remain>samples_per_symbol/2) sinearest++;
         unsigned socorrect = initial_sample_offset+(sinearest*samples_per_symbol); //the sample offset which input[i] should have been, in order to sample at the maximum effect point
-        int sodiff = abs(socorrect-input[i]);
+        int sodiff = abs((int)(socorrect-input[i]));
         float ndiff = (float)sodiff/samples_per_symbol;
 
         ndiff_rad[i] = ndiff*PI;

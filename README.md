@@ -159,7 +159,7 @@ You can use these commands on complex streams, too, as they are only interleaved
 
 ### csdr commands
 
-`csdr` should be considered as a reference implementation on using `libcsdr`. For additional details on how to use the library, check `csdr.c` and `libcsdr.c`.
+`csdr` should be considered as a reference implementation on using `libcsdr`. For additional details on how to use the library, check `csdr.c` and `libcsdr.cpp`.
 
 Regarding `csdr`, the first command-line parameter is the name of a function, others are the parameters for the given function. Compulsory parameters are noted as `<parameter>`, optional parameters are noted as `[parameter]`.
 Optional parameters have safe defaults, for more info look at the code.
@@ -476,7 +476,7 @@ It does de-emphasis on narrow-band FM for communication equipment (e.g. two-way 
 
 It uses fixed filters so it works only on predefined sample rates, for the actual list of them run: 
 
-    cat libcsdr.c | grep DNFMFF_ADD_ARRAY
+    cat libcsdr.cpp | grep DNFMFF_ADD_ARRAY
 
 ----
 
@@ -518,7 +518,7 @@ The transition bandwidth (proportional to the sampling rate) can be calculated a
 
 Some functions (below) require the `transition_bw` to be given instead of filter `length`. Try to find the best compromise between speed and accuracy by changing this parameter.
 
-`window` is the window function used to compensate finite filter length. Its typical values are: `HAMMING`, `BLACKMAN`, `BOXCAR`. For the actual list of values, run: `cpp libcsdr.c | grep window\ ==`
+`window` is the window function used to compensate finite filter length. Its typical values are: `HAMMING`, `BLACKMAN`, `BOXCAR`. For the actual list of values, run: `cpp libcsdr.cpp | grep window\ ==`
 
 The `--octave` parameter lets you directly view the filter response in `octave`. For more information, look at the [Usage by example] section.
 

@@ -35,6 +35,11 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #define MIN_M(x,y) (((x)>(y))?(y):(x))
 #define MAX_M(x,y) (((x)<(y))?(y):(x))
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+
 /*
    _____                      _
   / ____|                    | |
@@ -501,4 +506,8 @@ void cicddc_free(void *state);
 void cicddc_s16_c(void *state, int16_t *input, complexf *output, int outsize, float rate);
 void cicddc_cs16_c(void *state, int16_t *input, complexf *output, int outsize, float rate);
 void cicddc_cu8_c(void *state, uint8_t *input, complexf *output, int outsize, float rate);
+
+#ifdef __cplusplus
+}
+#endif
 
